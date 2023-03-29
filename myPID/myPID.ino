@@ -56,6 +56,21 @@ int prevLoopTime = 0;
 int prevTachoTime = 0;
 int prevPrintTime = 0;
 
+
+int loopCount = 0;
+float gyroAngle = 0;
+float measuredAngle = 0;
+float prevTachoCount = 0;
+float wheelAV = 0;
+float targetAngle = 0;
+float error = 0;
+float prevError = 0;
+float integral = 0;
+float derivative = 0;
+float PIDoutput = 0;
+float motorCtrl = 0;
+
+
 enum risingUp {
    true,
    false
@@ -105,84 +120,89 @@ void loop()
 
    // Safety check
     if (abs(accel_ang_x) >= ANGLE_LIMIT) {
-        if (secondsSinceStart < 0.001) {
+        if (secondsSinceStart < 0.01) {
             Serial.println("START RISE UP SEQUENCE");
             risingUp = true;
         }
-        else if(risingUp) {
-            //Serial.println("PROGRAM STOPPED, angle is too large: %.2f" % (measuredAngle));
+        else if(!risingUp) {
+            Serial.println("PROGRAM STOPPED, angle is too large: %.2f" % (measuredAngle));
         }        
     }
 
-
+    
     // Calculate wheel angular velocity
-    if (perf_counter_ns() - prevTachoTime) / 1e6 >= WHEEL_AV_INTERVAL:
-        tachoTimeDelta = (perf_counter_ns() - prevTachoTime) / 1e9  // [sec]
-        prevTachoTime = perf_counter_ns()
+    if (((millis() - prevTachoTime) / 1e6 )>= WHEEL_AV_INTERVAL){
+        tachoTimeDelta = (millis() - prevTachoTime) / 1e9;  // [sec]
+        prevTachoTime = millis();
         
-        pulses = tachoCount - prevTachoCount
-        prevTachoCount = tachoCount
-        cycles = pulses / 360   // 360 pulses per rotation
-        wheelAV = cycles / tachoTimeDelta * 2 * math.pi  // [rad/s]
+        pulses = tachoCount - prevTachoCount;
+        prevTachoCount = tachoCount;
+        cycles = pulses / 360;   // 360 pulses per rotation
+        wheelAV = cycles / tachoTimeDelta * 2 * 3.14;  // [rad/s]
+    }
+        
 
-
-    // Rise up sequence
+    // Rise up sequence, usamos el doble impulso meteoro inverso
     if (risingUp) {
         if (secondsSinceStart < 1.0) {
             // speed up reaction wheel to full speed
-            if (measuredAngle < 0) move(forward, int speed)
-            motorPWM.value = 1.0
-            motorDIR1.value = (measuredAngle < 0)
-            motorDIR2.value = (measuredAngle > 0)
+            if (measuredAngle < 0) move(forward, int speed);
+            else if (measuredAngle > 0) move(backward, int speed);
         }
         else if (secondsSinceStart < 1.5){
             // change direction using full power
-            motorPWM.value = 1.0
-            motorDIR1.value = (measuredAngle > 0)
-            motorDIR2.value = (measuredAngle < 0)
-            // wait until close to top position, then start balancing
-            if (abs(measuredAngle) < RISEUP_END_ANGLE) {
-                Serial.println("END RISE UP SEQUENCE");
-                risingUp = false;
-            }   
+            if (measuredAngle > 0) move(forward, int speed);
+            else if (measuredAngle < 0){
+                move(backward, int speed);
+                // wait until close to top position, then start balancing
+                if (abs(measuredAngle) < RISEUP_END_ANGLE) {
+                    Serial.println("END RISE UP SEQUENCE");
+                    risingUp = false;
+                }   
+            } 
         }
         else {
             print("RISE UP TIMEOUT");
-            break;
         }     
     }
     else if (!risingUp) {
         // variate target angle
-        if measuredAngle < targetAngle:
-            targetAngle += ANGLE_FIXRATE * timeDelta
-        else:
-            targetAngle -= ANGLE_FIXRATE * timeDelta
+        if (measuredAngle < targetAngle) targetAngle += ANGLE_FIXRATE * timeDelta;
+        else targetAngle -= ANGLE_FIXRATE * timeDelta;
         
         // reduce continuous rotation
-        targetAngle -= ANGLE_FIXRATE_2 * wheelAV * timeDelta
+        targetAngle -= ANGLE_FIXRATE_2 * wheelAV * timeDelta;
         
         // PID controller
-        error = targetAngle - measuredAngle
-        integral += error * timeDelta
-        derivative = (error - prevError) / timeDelta
-        prevError = error
-        PIDoutput = KP * error + KI * integral + KD * derivative
+        error = targetAngle - measuredAngle;
+        integral += error * timeDelta;
+        derivative = (error - prevError) / timeDelta;
+        prevError = error;
+        PIDoutput = KP * error + KI * integral + KD * derivative;
         
         // compensate for motor back EMF voltage
-        current = -PIDoutput
-        voltage = MOTOR_R * current + MOTOR_Ke * wheelAV
+        current = -PIDoutput;
+        voltage = MOTOR_R * current + MOTOR_Ke * wheelAV;
         
         //convert voltage to pwm duty cycle
-        motorCtrl = voltage / SUPPLY_VOLTAGE
+        motorCtrl = voltage / SUPPLY_VOLTAGE;
         
         // drive motor
-        motorCtrl = min(max(motorCtrl, -1), 1)  #limit range to -1...1
-        motorPWM.value = abs(motorCtrl)
-        motorDIR1.value = (motorCtrl > 0)
-        motorDIR2.value = (motorCtrl < 0)
+        if (motorCtrl > 0) move(forward, abs(motorCtrl));
+        else if (motorCtrl < 0) move(backward, int speed);
     }
-        
-        
+
+    // debug print
+    if (((millis() - prevPrintTime) / 1e9) >= 1.0){
+        secondsSinceLastPrint = (millis() - prevPrintTime) / 1e9;
+        prevPrintTime = millis();
+        loopInterval = secondsSinceLastPrint / loopCount * 1000;
+        loopCount = 0;
+        Serial.println("measuredAngle: %.2f, motorCtrl: %.2f, loopInterval: %.2f ms"
+              % (measuredAngle, motorCtrl, loopInterval));
+    }
+
+    loopCount += 1;
 
    // Mostrar resultados IMU
    Serial.print("Inclinacion en X: ");
